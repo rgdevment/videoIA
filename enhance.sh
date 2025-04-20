@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
+# controla si se aplica escalado IA (true/false)
+UPSCALE_ENABLED=true
+
+# Función de timestamp
 ts(){ echo "[$(date '+%H:%M:%S')] $*"; }
 
 # ----------------------------------------------------------------
-# Uso: ./enhance.sh videos/input.mp4
+# Uso: ./enhance.sh <archivo.mp4>
 # ----------------------------------------------------------------
 if [ $# -lt 1 ]; then
   echo "Uso: $0 <archivo.mp4>"
@@ -18,139 +22,119 @@ INPUT="$1"
 DIR="$(dirname "$INPUT")"
 NAME="$(basename "$INPUT" .mp4)"
 
+# Rutas de salida
+DENOISE_VIDEO="$DIR/denoise_${NAME}.mp4"
+ORIG_AUDIO="$DIR/orig_${NAME}.aac"
+UPSCALED_VIDEO="$DIR/upscaled_${NAME}.mp4"
+FINAL_NO_AUDIO="$DIR/final_${NAME}.mp4"
+FINAL_OUTPUT="$DIR/final_audio_${NAME}.mp4"
+FRAMES_DIR="$DIR/frames"
+UPSCALED_FRAMES_DIR="$DIR/upscaled_frames"
+
+# ----------------------------------------------------------------
+# 0) Extraer audio original
+# ----------------------------------------------------------------
+ts "🔊 Fase 0: Extracción de audio original"
+ffmpeg -hide_banner -y -stats -i "$INPUT" -vn -acodec copy "$ORIG_AUDIO"
+ts "✅ Audio extraído en $ORIG_AUDIO"
+
 # ----------------------------------------------------------------
 # 1) Denoise
 # ----------------------------------------------------------------
-DENOISE="$DIR/denoise_${NAME}.mp4"
-if [ -f "$DENOISE" ]; then
-  ts "⏭️ Omitiendo denoise (ya existe)"
+ts "🎬 Fase 1: Denoise (hqdn3d)"
+ffmpeg -hide_banner -y -stats -i "$INPUT" \
+  -vf "hqdn3d=4:3:6:4" \
+  -c:v libx264 -crf 18 -preset slow \
+  -pix_fmt yuv420p -movflags +faststart \
+  -an "$DENOISE_VIDEO"
+ts "✅ $DENOISE_VIDEO listo"
+
+# ----------------------------------------------------------------
+# 2) Escalado IA (opcional)
+# ----------------------------------------------------------------
+if [ "$UPSCALE_ENABLED" != true ]; then
+  ts "⏭️ Escalado IA desactivado. Saltando fases 2A-2C"
 else
-  ts "🎬 Fase 1: Denoise (hqdn3d)"
-  ffmpeg -hide_banner -y -stats -i "$INPUT" \
-    -vf "hqdn3d=4:3:6:4" \
-    -c:v libx264 -crf 18 -preset slow \
-    -an "$DENOISE"
-  ts "✅ $DENOISE listo"
-fi
+  # 2A) Extraer frames
+  ts "🖼️ Fase 2A: Extracción de frames"
+  rm -rf "$FRAMES_DIR" "$UPSCALED_FRAMES_DIR"
+  mkdir -p "$FRAMES_DIR" "$UPSCALED_FRAMES_DIR"
+  ffmpeg -hide_banner -y -stats -i "$DENOISE_VIDEO" \
+    -vsync 0 "$FRAMES_DIR/frame_%08d.png"
+  ts "✅ frames extraídos en $FRAMES_DIR"
 
-# ----------------------------------------------------------------
-# 2A) Extraer frames
-# ----------------------------------------------------------------
-ts "🖼️ Fase 2A: Extracción de frames"
-FRAMES="$DIR/frames"
-UPSCALED="$DIR/upscaled_frames"
-rm -rf "$FRAMES" "$UPSCALED"
-mkdir -p "$FRAMES" "$UPSCALED"
-ffmpeg -hide_banner -y -stats -i "$DENOISE" \
-  -vsync 0 "$FRAMES/frame_%08d.png"
-ts "✅ frames extraídos en $FRAMES"
-
-# ----------------------------------------------------------------
-# 2B) IA Upscale de frames
-#     GPU MPS = tile=0 + half
-#     CPU    = tile=512 + multiprocessing (máx 4 hilos)
-# ----------------------------------------------------------------
-# detectamos MPS
-HAS_MPS=$(python3 - <<PYCODE
+  # 2B) Upscale con Python
+  ts "🔍 Fase 2B: Upscale IA de frames"
+  HAS_MPS=$(python3 - <<PYCODE
 import torch; print(torch.backends.mps.is_available())
 PYCODE
-)
+  )
+  if [ "$HAS_MPS" = "True" ]; then
+    DEVICE="mps"; TILE=0; HALF_FLAG="--half"
+    ts "⚡ Dispositivo: GPU MPS"
+  else
+    DEVICE="cpu"; TILE=512; HALF_FLAG=""
+    ts "⚙️ Dispositivo: CPU"
+  fi
 
-if [ "$HAS_MPS" = "True" ]; then
-  ts "⚡ Dispositivo: GPU MPS (tile=0, half precision)"
-  DEVICE="mps"; TILE=0; HALF="True"; NPROC=1
-else
-  CORES=$(sysctl -n hw.ncpu)
-  NPROC=$(( CORES<4 ? CORES : 4 ))
-  ts "⚙️ Dispositivo: CPU (tile=512, procesos=$NPROC)"
-  DEVICE="cpu"; TILE=512; HALF="False"
+  python3 process_frames.py \
+    --input-dir "$FRAMES_DIR" \
+    --output-dir "$UPSCALED_FRAMES_DIR" \
+    --stages deblurgan edvr realesrgan \
+    --device "$DEVICE" --tile "$TILE" $HALF_FLAG
+  ts "✅ frames procesados en $UPSCALED_FRAMES_DIR"
+
+  # 2C) Reensamblar vídeo
+  ts "⚙️ Fase 2C: Reensamblar video"
+  R_FRAME_RATE=$(ffprobe -v error -select_streams v:0 \
+    -show_entries stream=r_frame_rate \
+    -of default=noprint_wrappers=1:nokey=1 "$DENOISE_VIDEO")
+  NUM=${R_FRAME_RATE%%/*}; DEN=${R_FRAME_RATE##*/}
+  FPS=$(echo "scale=2; $NUM / $DEN" | bc)
+
+  ffmpeg -hide_banner -y -stats -framerate "$FPS" \
+    -i "$UPSCALED_FRAMES_DIR/frame_%08d.png" \
+    -c:v libx264 -crf 16 -preset slow \
+    -pix_fmt yuv420p -movflags +faststart \
+    -an "$UPSCALED_VIDEO"
+  ts "✅ $UPSCALED_VIDEO listo"
 fi
 
-ts "🔍 Fase 2B: Upscale IA de frames"
-python3 <<PYCODE
-import os, cv2, torch
-from multiprocessing import Pool
-from basicsr.archs.rrdbnet_arch import RRDBNet
-from realesrgan.utils import RealESRGANer
-
-print("🚀 Iniciando upscaler…", flush=True)
-
-device = torch.device("${DEVICE}")
-model = RRDBNet(num_in_ch=3, num_out_ch=3, scale=2)
-upscaler = RealESRGANer(
-    scale=2,
-    model_path="https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
-    model=model,
-    tile=${TILE},
-    tile_pad=10,
-    pre_pad=10,
-    half=${HALF},
-    device=device
-)
-
-def process_frame(fname):
-    inp = os.path.join("${FRAMES}", fname)
-    outp = os.path.join("${UPSCALED}", fname)
-    # corregir azul: BGR→RGB → enhance → RGB→BGR
-    bgr = cv2.imread(inp, cv2.IMREAD_COLOR)
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    res, _ = upscaler.enhance(rgb, outscale=2)
-    bgr_out = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(outp, bgr_out)
-    print(f"[Upscale] {fname} completado", flush=True)
-
-files = sorted(os.listdir("${FRAMES}"))
-if device.type == "mps":
-    for f in files:
-        process_frame(f)
-else:
-    with Pool(${NPROC}) as p:
-        p.map(process_frame, files)
-PYCODE
-
-ts "✅ frames upscalados en $UPSCALED"
-
 # ----------------------------------------------------------------
-# 2C) Reensamblar vídeo
+# 3) Color y nitidez
 # ----------------------------------------------------------------
-ts "⚙️ Fase 2C: Reensamblar video"
+if [ "$UPSCALE_ENABLED" = true ]; then
+  SOURCE_VIDEO="$UPSCALED_VIDEO"
+else
+  SOURCE_VIDEO="$DENOISE_VIDEO"
+fi
 
-# extraemos "num/den" y calculamos con bc para tener un float con 2 decimales
-R_FRAME_RATE=$(ffprobe -v error -select_streams v:0 \
-  -show_entries stream=r_frame_rate \
-  -of default=noprint_wrappers=1:nokey=1 "$DENOISE")
-NUM=${R_FRAME_RATE%%/*}
-DEN=${R_FRAME_RATE##*/}
-FPS=$(echo "scale=2; $NUM / $DEN" | bc)
-
-ffmpeg -hide_banner -y -stats -framerate "$FPS" \
-  -i "$UPSCALED/frame_%08d.png" \
-  -c:v libx264 -crf 16 -preset slow \
-  -an "$DIR/upscaled_${NAME}.mp4"
-ts "✅ $DIR/upscaled_${NAME}.mp4 listo"
-
-# ----------------------------------------------------------------
-# 3) Corrección de color + nitidez
-# ----------------------------------------------------------------
-ts "🎨 Fase 3: Color & nitidez"
-ffmpeg -hide_banner -y -stats -i "$DIR/upscaled_${NAME}.mp4" \
+ts "🎨 Fase 3: Color y nitidez"
+ffmpeg -hide_banner -y -stats -i "$SOURCE_VIDEO" \
   -vf "eq=contrast=1.1:brightness=0.02:saturation=1.1,unsharp=3:3:0.8" \
   -c:v libx264 -crf 16 -preset slow \
-  -c:a copy "$DIR/final_${NAME}.mp4"
-ts "✅ $DIR/final_${NAME}.mp4 listo"
+  -pix_fmt yuv420p -movflags +faststart \
+  -an "$FINAL_NO_AUDIO"
+ts "✅ $FINAL_NO_AUDIO listo"
 
 # ----------------------------------------------------------------
-# 4) Audio (priorizando voces)
+# 4) Mux y normalización de audio
 # ----------------------------------------------------------------
-ts "🔊 Fase 4: Denoise y normalización de audio"
-ffmpeg -hide_banner -y -stats -i "$DIR/final_${NAME}.mp4" \
+ts "🔊 Fase 4: Normalize y mux audio"
+ffmpeg -hide_banner -y -stats \
+  -i "$FINAL_NO_AUDIO" \
+  -i "$ORIG_AUDIO" \
+  -map 0:v -map 1:a \
   -af "afftdn,acompressor=threshold=-20dB:ratio=4:attack=5:release=50,dynaudnorm,loudnorm=I=-16:LRA=7:TP=-1.5" \
-  -c:v copy "$DIR/final_audio_${NAME}.mp4"
-ts "✅ $DIR/final_audio_${NAME}.mp4 listo"
+  -c:v copy -c:a aac -movflags +faststart \
+  "$FINAL_OUTPUT"
+ts "✅ $FINAL_OUTPUT listo"
 
+# ----------------------------------------------------------------
+# Fin del pipeline
 # ----------------------------------------------------------------
 ts "🎉 Pipeline completo. Archivos generados:"
-echo " - $DENOISE"
-echo " - $DIR/upscaled_${NAME}.mp4"
-echo " - $DIR/final_${NAME}.mp4"
-echo " - $DIR/final_audio_${NAME}.mp4"
+echo " - $DENOISE_VIDEO"
+echo " - $UPSCALED_VIDEO"
+echo " - $FINAL_NO_AUDIO"
+echo " - $FINAL_OUTPUT"
