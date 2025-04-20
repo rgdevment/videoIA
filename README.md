@@ -52,6 +52,90 @@
     	- final_mi_video.mp4
     	- final_audio_mi_video.mp4
 
+## Instalar BasicSR con soporte EDVR
+
+### 1) Clonar el repositorio de BasicSR
+
+Abre Terminal y ejecuta:
+
+```bash
+git clone https://github.com/xinntao/BasicSR.git ~/BasicSR
+```
+
+### 2) Instalar dependencias
+
+```bash
+pip install -r ~/BasicSR/requirements.txt
+```
+
+### 3) Instalar BasicSR en modo editable
+
+```
+pip install --use-pep517 -e .
+```
+
+## Descarga de modelos adicionales
+
+### DeblurGAN‑v2
+
+Clona el repositorio y crea el directorio de modelos:
+
+```bash
+git clone https://github.com/VITA-Group/DeblurGANv2.git ~/DeblurGANv2
+mkdir -p ~/DeblurGANv2/models
+```
+
+Descarga los pesos pre‑entrenados (Inception‑ResNet‑v2 y MobileNet):
+
+```bash
+curl -L -o ~/DeblurGANv2/models/fpn_inception.h5 "https://drive.google.com/uc?export=download&id=1UXcsRVW-6KF23_TNzxw-xC0SzaMfXOaR"
+curl -L -o ~/DeblurGANv2/models/fpn_mobilenet.h5 "https://drive.google.com/uc?export=download&id=1JhnT4BBeKBBSLqTo6UsJ13HeBXevarrU"
+```
+
+:contentReference[oaicite:0]{index=0}
+
+### EDVR (BasicSR)
+
+Sitúate en la carpeta del repositorio de BasicSR y ejecuta el script de descarga:
+
+```bash
+cd ~/BasicSR
+python scripts/download_pretrained_models.py EDVR
+```
+
+Esto descargará automáticamente todos los modelos EDVR (Vimeo90K, REDS, deblur, etc.) en  
+`experiments/pretrained_models/` :contentReference[oaicite:1]{index=1}
+
+Si prefieres hacerlo manualmente, por ejemplo para el track REDS_SR_L:
+
+```bash
+mkdir -p ~/BasicSR/experiments/pretrained_models
+curl -L -o ~/BasicSR/experiments/pretrained_models/EDVR_REDS_SR_L.zip \
+  "https://drive.google.com/uc?export=download&id=1h6E0QVZyJ5SBkcnYaT1puxYYPVbPsTLt"
+unzip ~/BasicSR/experiments/pretrained_models/EDVR_REDS_SR_L.zip \
+  -d ~/BasicSR/experiments/pretrained_models/
+```
+
+:contentReference[oaicite:2]{index=2}
+
+---
+
+Con esto tendrás todos los pesos necesarios para las etapas de DeblurGAN, EDVR y RealESRGAN en tu pipeline de vídeo.
+::contentReference[oaicite:3]{index=3}
+
+### 5) Verificar la importación
+
+En tu entorno virtual, prueba:
+
+```bash
+python3 - <<PY
+from basicsr.archs.edvr_arch import EDVR
+print("✅ EDVR OK")
+PY
+```
+
+---
+
 ## Instalación local de DeblurGAN‑v2
 
 ### 1) Clonar el repositorio

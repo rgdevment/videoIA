@@ -2,3 +2,4 @@
 /upscaled_frames
 /videos
 *.mp4
+models/fpn_*
