@@ -45,11 +45,7 @@ ts "✅ Audio extraído en $ORIG_AUDIO"
 # 1) Denoise
 # ----------------------------------------------------------------
 ts "🎬 Fase 1: Denoise (hqdn3d)"
-ffmpeg -hide_banner -y -stats -i "$INPUT" \
-  -vf "hqdn3d=4:3:6:4" \
-  -c:v libx264 -crf 18 -preset slow \
-  -pix_fmt yuv420p -movflags +faststart \
-  -an "$DENOISE_VIDEO"
+ffmpeg -hide_banner -y -stats -i "$INPUT" -vf "hqdn3d=4:3:6:4" -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p -movflags +faststart -an "$DENOISE_VIDEO"
 ts "✅ $DENOISE_VIDEO listo"
 
 # ----------------------------------------------------------------
@@ -62,8 +58,7 @@ else
   ts "🖼️ Fase 2A: Extracción de frames"
   rm -rf "$FRAMES_DIR" "$UPSCALED_FRAMES_DIR"
   mkdir -p "$FRAMES_DIR" "$UPSCALED_FRAMES_DIR"
-  ffmpeg -hide_banner -y -stats -i "$DENOISE_VIDEO" \
-    -vsync 0 "$FRAMES_DIR/frame_%08d.png"
+  ffmpeg -hide_banner -y -stats -i "$DENOISE_VIDEO" -vsync 0 "$FRAMES_DIR/frame_%08d.png"
   ts "✅ frames extraídos en $FRAMES_DIR"
 
   # 2B) Upscale con Python
@@ -95,11 +90,7 @@ PYCODE
   NUM=${R_FRAME_RATE%%/*}; DEN=${R_FRAME_RATE##*/}
   FPS=$(echo "scale=2; $NUM / $DEN" | bc)
 
-  ffmpeg -hide_banner -y -stats -framerate "$FPS" \
-    -i "$UPSCALED_FRAMES_DIR/frame_%08d.png" \
-    -c:v libx264 -crf 16 -preset slow \
-    -pix_fmt yuv420p -movflags +faststart \
-    -an "$UPSCALED_VIDEO"
+  ffmpeg -hide_banner -y -stats -framerate "$FPS" -i "$UPSCALED_FRAMES_DIR/frame_%08d.png" -c:v libx264 -crf 16 -preset slow -pix_fmt yuv420p -movflags +faststart -an "$UPSCALED_VIDEO"
   ts "✅ $UPSCALED_VIDEO listo"
 fi
 
@@ -113,24 +104,14 @@ else
 fi
 
 ts "🎨 Fase 3: Color y nitidez"
-ffmpeg -hide_banner -y -stats -i "$SOURCE_VIDEO" \
-  -vf "eq=contrast=1.1:brightness=0.02:saturation=1.1,unsharp=3:3:0.8" \
-  -c:v libx264 -crf 16 -preset slow \
-  -pix_fmt yuv420p -movflags +faststart \
-  -an "$FINAL_NO_AUDIO"
+ffmpeg -hide_banner -y -stats -i "$SOURCE_VIDEO" -vf "eq=contrast=1.1:brightness=0.02:saturation=1.1,unsharp=3:3:0.8" -c:v libx264 -crf 16 -preset slow -pix_fmt yuv420p -movflags +faststart -an "$FINAL_NO_AUDIO"
 ts "✅ $FINAL_NO_AUDIO listo"
 
 # ----------------------------------------------------------------
 # 4) Mux y normalización de audio
 # ----------------------------------------------------------------
 ts "🔊 Fase 4: Normalize y mux audio"
-ffmpeg -hide_banner -y -stats \
-  -i "$FINAL_NO_AUDIO" \
-  -i "$ORIG_AUDIO" \
-  -map 0:v -map 1:a \
-  -af "afftdn,acompressor=threshold=-20dB:ratio=4:attack=5:release=50,dynaudnorm,loudnorm=I=-16:LRA=7:TP=-1.5" \
-  -c:v copy -c:a aac -movflags +faststart \
-  "$FINAL_OUTPUT"
+ffmpeg -hide_banner -y -stats -i "$FINAL_NO_AUDIO" -i "$ORIG_AUDIO" -map 0:v -map 1:a -af "afftdn,acompressor=threshold=-20dB:ratio=4:attack=5:release=50,dynaudnorm,loudnorm=I=-16:LRA=7:TP=-1.5" -c:v copy -c:a aac -movflags +faststart "$FINAL_OUTPUT"
 ts "✅ $FINAL_OUTPUT listo"
 
 # ----------------------------------------------------------------
