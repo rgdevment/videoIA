@@ -118,16 +118,12 @@ def load_edvr_model(device):
 
 
 def load_realesrgan_model(device, tile, half):
-    REAL_PATH = os.path.abspath(os.path.join(os.getcwd(), "models/RealESRGAN_x2plus.pth"))
-    if os.path.isfile(REAL_PATH):
-        model_path = REAL_PATH
-        print(f"INFO: Usando RealESRGAN local {REAL_PATH}")
-    else:
-        print("WARN: RealESRGAN local no encontrado; descarga automática.")
-        model_path = (
-            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/"
-            "RealESRGAN_x2plus.pth"
-        )
+    REAL_PATH = os.path.abspath(os.path.join(os.getcwd(), "models/RealESRGAN_x4plus.pth"))
+    print("WARN: RealESRGAN local no encontrado; descarga automática.")
+    model_path = (
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/"
+        "RealESRGAN_x2plus.pth"
+    )
     model = RRDBNet(num_in_ch=3, num_out_ch=3, scale=2)
     return RealESRGANer(
         scale=2, model_path=model_path,

@@ -2,6 +2,7 @@
 set -euxo pipefail
 
 # Temporal si hay soporte MPS y CUDA se le pasa al CPU (Muy lento, desactivar es recomendado)
+# Ademas no es confiable en los M1 o chip ARM genera pixeles negros.
 # export PYTORCH_ENABLE_MPS_FALLBACK=1
 
 # controla si se aplica escalado IA (true/false)
