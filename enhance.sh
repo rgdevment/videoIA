@@ -64,6 +64,14 @@ else
 
   # 2B) Upscale con Python
   ts "🔍 Fase 2B: Upscale IA de frames"
+
+  # Verificar que torch esté instalado
+  if ! python3 -c "import torch" >/dev/null 2>&1; then
+    echo "❌ PyTorch no está instalado. Ejecuta: pip install torch torchvision torchaudio"
+    exit 1
+  fi
+
+  # Ahora sí, chequear MPS
   HAS_MPS=$(python3 - <<PYCODE
 import torch; print(torch.backends.mps.is_available())
 PYCODE
